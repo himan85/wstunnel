@@ -39,7 +39,7 @@ func (r *Relay) pipeToWs(netConn net.Conn, wsConn *websocket.Conn) {
 	for {
 		err := netConn.SetReadDeadline(time.Now().Add(TIME_OUT * time.Second)) // timeout
 		if err != nil {
-			break
+			return
 		}
 		data := make([]byte, BUFFER_SIZE)
 		n, err := netConn.Read(data)
@@ -62,7 +62,7 @@ func (r *Relay) pipeToNet(netConn net.Conn, wsConn *websocket.Conn) {
 	for {
 		err := wsConn.SetReadDeadline(time.Now().Add(TIME_OUT * time.Second))
 		if err != nil {
-			break
+			return
 		}
 		_, p, err := wsConn.ReadMessage()
 		if err != nil {
@@ -126,7 +126,7 @@ func (l *Local) handleClientrRequest(clientConn net.Conn) {
 
 	u, err := url.Parse(l.serverAddr)
 	if err != nil {
-		Error.Printf(err.Error())
+		Error.Printf("src: %v, url parse error: %v", clientAddr, err.Error())
 		return
 	}
 
@@ -153,15 +153,15 @@ func (l *Local) handleClientrRequest(clientConn net.Conn) {
 
 	serverWs, _, err := dialer.Dial(l.serverAddr, REQUEST_HEADERS)
 	if err != nil {
-		Error.Printf("src: %v, client connection failed: %v", clientAddr, err.Error())
+		Error.Printf("src: %v, dial error: %v", clientAddr, err.Error())
 		return
 	}
 	defer func() {
 		serverWs.Close()
-		Trace.Printf("src: %v, dst: %v, server websocket connection closed.", clientAddr, l.serverAddr)
+		Trace.Printf("src: %v, websocket connection closed.", clientAddr)
 	}()
 
-	Trace.Printf("src: %v, dst: %v, websocket connection established, proxying...", clientAddr, l.serverAddr)
+	Trace.Printf("src: %v, websocket connection established, proxying...", clientAddr)
 
 	rl := Relay{}
 	rl.relay(clientConn, serverWs)
@@ -178,25 +178,28 @@ type Server struct {
 
 func (s *Server) handleLocalRequest(w http.ResponseWriter, r *http.Request) {
 	localWs, err := s.upgrader.Upgrade(w, r, nil)
-	localAddr := localWs.RemoteAddr()
 	if err != nil {
-		Error.Print("upgrade:", err)
+		Error.Printf("upgrade error: %v", err.Error())
 		return
 	}
+	localAddr := localWs.RemoteAddr()
 	defer func() {
 		localWs.Close()
-		Trace.Printf("src: %v, local websocket connection closed.", localAddr)
+		Trace.Printf("src: %v, websocket connection closed.", localAddr)
 	}()
+
 	remoteConn, err := net.DialTimeout(CONN_TYPE, s.remoteAddr, 10*time.Second)
 	if err != nil {
-		Error.Println(err)
+		Error.Printf("src: %v, dial error: %v", localAddr, err.Error())
 		return
 	}
-	remoteAddr := remoteConn.RemoteAddr()
+
 	defer func() {
 		remoteConn.Close()
-		Trace.Printf("src: %v, dst: %v, remote connection closed.", localAddr, remoteAddr)
+		Trace.Printf("src: %v, connection closed.", localAddr)
 	}()
+
+	Trace.Printf("src: %v, connection established, proxying...", localAddr)
 
 	rl := Relay{}
 	rl.relay(remoteConn, localWs)
@@ -204,7 +207,7 @@ func (s *Server) handleLocalRequest(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) startServer() error {
 	http.HandleFunc("/", s.handleLocalRequest)
-	Info.Println("Listening on " + s.listenAddr)
+	Info.Println("listening on " + s.listenAddr)
 
 	var err error
 	if s.isTls {
@@ -221,10 +224,10 @@ func (s *Server) startServer() error {
 }
 
 func initLogger(logLevel string) {
-	file, err := os.OpenFile("errors.txt",
+	file, err := os.OpenFile("log.txt",
 		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err != nil {
-		log.Fatalln("Failed to open error log file:", err)
+		log.Fatalln("failed to open error log file:", err)
 	}
 
 	var t io.Writer = os.Stdout
